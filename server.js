@@ -4,7 +4,8 @@ const express = require('express'),
     auth = require('./auth'),
     cookieParser = require('cookie-parser'),
     cookieSession = require('cookie-session'),
-    WebSocket = require('ws')
+    WebSocket = require('ws'),
+    path = require('path')
 
 
 
@@ -41,23 +42,46 @@ app.use(cookieSession({
 
 app.use(cookieParser())
 
+
+app.use(express.static('dist'))
+
+app.use((req, res, next) => {
+  if (!req.session.token) { 
+    let indexOfStaticFilewsMiddlware = false
+
+    app._router.stack.forEach((fn, index) => {
+      if (fn.name === 'serveStatic')
+      indexOfStaticFilewsMiddlware = index
+    })
+
+    if (indexOfStaticFilewsMiddlware !== false)
+      app._router.stack.splice(indexOfStaticFilewsMiddlware, 1)
+  }
+
+  next()
+})
+
 app.get('/', (req, res) => {
   if (req.session.token) {
-    console.log(req.session.passport.user.profile.emails[0].value, req.session.token)
     res.cookie('token', req.session.token)
-    console.log(res.headers)
-    
-    res.json({
-        status: 'session cookie set',
-        email: req.session.passport.user.profile.emails[0].value
-    })
+    res.end('<a href="/app">App</a>')
   } else {
-    // if no token
-    // res.redirect('/auth')
     res.cookie('token', '')
     res.end('<a href="/auth/google">Log in</a>')
+  
   }
 })
+
+app.get('/app', (req, res) => {
+  if (req.session.token) {
+     res.sendFile(path.resolve(__dirname, 'index.html'))
+  } else {
+    console.log('/app', req.session.token);
+    res.cookie('token', '')
+    res.redirect('/')
+  }
+})
+
 
 app.get('/auth/google', passport.authenticate('google', {
   scope: [
@@ -66,9 +90,7 @@ app.get('/auth/google', passport.authenticate('google', {
   ]
 }))
 
-app.get(
-  '/auth/google/callback',
-  passport.authenticate('google', { failureRedirect: '/' }),
+app.get('/auth/google/callback', passport.authenticate('google', { failureRedirect: '/' }),
   (req, res) => {
     req.session.token = req.user.token
     res.redirect('/')
@@ -77,7 +99,7 @@ app.get(
 
 app.get('/logout', (req, res) => {
   console.log('logout')
-  console.log(req.session.passport.user.profile.emails[0].value)
+  // console.log(req.session.passport.user.profile.emails[0].value)
 
   req.logout()
   req.session = null
@@ -107,7 +129,7 @@ app.get('/feedback/:msg', (req,res) => {
     body: req.params.msg,
     author: req.session.passport.user.profile.emails[0].value
   }
-  
+
   socket.send(JSON.stringify(socketMessage))
 
   res.json({

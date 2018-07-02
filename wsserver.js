@@ -1,6 +1,3 @@
-
-
-
 // create ws
 // accept new authenticated users only from the http server (sign with secret key)
 // accept sign ups for the broadcast messages from clients that are authenticated
@@ -8,7 +5,7 @@
 // broadcast messages for the http server to signed up clients
 // control expiration of tokens of authenticated users
 
-const PORT = 6000
+const PORT = 5005
 const ADD_USER = '/auth'
 const REMOVE_USER = '/deauth'
 const ADD_FEEDBACK = '/feedback'
@@ -20,48 +17,40 @@ const authenticated_users = {
   // token : valid until this time
 }
 
-const fs = require('fs');
-const http = require('http');
-const WebSocket = require('ws');
+const fs = require('fs')
+const http = require('http')
+const WebSocket = require('ws')
  
-const server = new http.createServer();
-const wss = new WebSocket.Server({ server });
+const server = new http.createServer()
+const wss = new WebSocket.Server({ server })
+
 wss.broadcast = function broadcast(data) {
   wss.clients.forEach(function each(client) {
     if (client.readyState === WebSocket.OPEN) {
-      client.send(data);
+      client.send(data)
     }
-  });
-};
+  })
+}
+
 wss.on('connection', function connection(ws) {
-  console.log('received: %s', ws);
+  console.log('received: %s', ws)
+
   ws.on('message', function incoming(message) {
-    console.log('received: %s', message);
-    wss.broadcast(message)
-  });
+    const messageJSON = JSON.parse(message)
+    delete messageJSON.secret
+    console.log('received: %s', messageJSON)
+    wss.broadcast(JSON.stringify(messageJSON))
+  })
  
-  ws.send('something');
-});
+  ws.send('Connection to WS Server.')
+})
 
 wss.on('open', function open() {
-  ws.send('something');
-});
+  // HTTP Server must first register the user
+  ws.send('Open a WS Server.')
+})
  
-server.listen(5005);
-
-
-// ws.on(ADD_USER, (req, res) => {
-//   authenticated_users[req.token.id] = req.token.expiry
-//   res.json({status: 'done'})
-// })
-
-// ws.on(ADD_FEEDBACK, (req, res) => {
-//   if (!isTokenValid(req.token, authenticated_users)) {
-//     // prompt user to relogin
-//   }
-
-//   // proceed
-// })
+server.listen(PORT)
 
 function isTokenValid({ token, token_list }) {
   if (!token_list[token]) return false
