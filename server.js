@@ -5,31 +5,10 @@ const express = require('express'),
     cookieParser = require('cookie-parser'),
     cookieSession = require('cookie-session'),
     WebSocket = require('ws'),
-    path = require('path')
+    path = require('path'),
+    config = require('./config')
 
-
-
-const socket = new WebSocket('ws://localhost:5005')
-socket.onopen = function() {
-  console.log("Соединение установлено.");
-};
-
-socket.onclose = function(event) {
-  if (event.wasClean) {
-    console.log('Соединение закрыто чисто');
-  } else {
-    console.log('Обрыв соединения'); // например, "убит" процесс сервера
-  }
-  console.log('Код: ' + event.code + ' причина: ' + event.reason);
-};
-
-socket.onmessage = function(event) {
-  console.log("Получены данные " + event.data);
-};
-
-socket.onerror = function(error) {
-  console.log("Ошибка " + error.message);
-};
+const socket = initSocket()
 
 auth(passport)
 
@@ -42,46 +21,31 @@ app.use(cookieSession({
 
 app.use(cookieParser())
 
-
-app.use(express.static('dist'))
-
 app.use((req, res, next) => {
-  if (!req.session.token) { 
-    let indexOfStaticFilewsMiddlware = false
-
-    app._router.stack.forEach((fn, index) => {
-      if (fn.name === 'serveStatic')
-      indexOfStaticFilewsMiddlware = index
-    })
-
-    if (indexOfStaticFilewsMiddlware !== false)
-      app._router.stack.splice(indexOfStaticFilewsMiddlware, 1)
-  }
-
+  console.log(`${req.method}::path: ${req.path}`)
   next()
 })
 
 app.get('/', (req, res) => {
   if (req.session.token) {
     res.cookie('token', req.session.token)
-    res.end('<a href="/app">App</a>')
+    res.sendFile(path.resolve(__dirname, 'dist/index.html'))
   } else {
     res.cookie('token', '')
     res.end('<a href="/auth/google">Log in</a>')
-  
   }
 })
 
-app.get('/app', (req, res) => {
+// Give app only to authenticated users.
+app.get('/app.bundle.js', (req, res) => {
   if (req.session.token) {
-     res.sendFile(path.resolve(__dirname, 'index.html'))
+    res.cookie('token', req.session.token)  
+    res.sendFile(path.resolve(__dirname, 'dist/app.bundle.js'))
   } else {
-    console.log('/app', req.session.token);
-    res.cookie('token', '')
+    console.log('No session -- no static files.');
     res.redirect('/')
-  }
+  } 
 })
-
 
 app.get('/auth/google', passport.authenticate('google', {
   scope: [
@@ -92,8 +56,13 @@ app.get('/auth/google', passport.authenticate('google', {
 
 app.get('/auth/google/callback', passport.authenticate('google', { failureRedirect: '/' }),
   (req, res) => {
-    req.session.token = req.user.token
-    res.redirect('/')
+    console.log('Google login by: ', req.user.profile.emails[0].value)
+    if (req.user.profile.emails[0].value.includes('@cryptopay.me') === false) {
+      res.end('Use @cryptopay.me email to login')
+    } else {
+      req.session.token = req.user.token
+      res.redirect('/')
+    }
   }
 )
 
@@ -114,29 +83,53 @@ app.get('/test', (req,res) => {
     res: JSON.stringify(res._headers, null, 2)})
 })
 
-app.get('/feedback/:msg', (req,res) => {
+app.get('/api/:msg', (req,res) => {
   // TODO: Check Token
   // Write to DB
   // Pass to WS-Server
   // WS-Server Broadcasts to authenticated users
   res.cookie('token', req.session.token)
 
-  console.log(req.params)
-  console.log(req.session.token)
-  
+  if (!req.session.token) {
+    res.send('{"status": "error", body":"Access denied."}')
+    return
+  }
+
   const socketMessage = {
-    secret: 'xxx9924',
+    secret: config.ws.secret,
     body: req.params.msg,
     author: req.session.passport.user.profile.emails[0].value
   }
 
   socket.send(JSON.stringify(socketMessage))
-
-  res.json({
-    req: JSON.stringify(req.headers, null, 2),
-    res: JSON.stringify(res._headers, null, 2)})
 })
 
 app.listen(5000, () => {
     console.log('Server is running on port 5000')
 })
+
+function initSocket() {
+  const socket = new WebSocket('ws://localhost:5005')
+  socket.onopen = function() {
+    console.log("Соединение установлено.");
+  }
+
+  socket.onclose = function(event) {
+    if (event.wasClean) {
+      console.log('Соединение закрыто чисто');
+    } else {
+      console.log('Обрыв соединения'); // например, "убит" процесс сервера
+    }
+    console.log('Код: ' + event.code + ' причина: ' + event.reason);
+  }
+
+  socket.onmessage = function(event) {
+    console.log("Получены данные " + event.data);
+  }
+
+  socket.onerror = function(error) {
+    console.log("Ошибка " + error.message);
+  }
+
+  return socket
+}
