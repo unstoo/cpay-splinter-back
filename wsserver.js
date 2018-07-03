@@ -13,16 +13,35 @@ const ADD_TAG = '/tag/add'
 const REMOVE_TAG = '/tag/remove'
 const SIGN_UP = '/signup'
 
-const authenticated_users = {
-  // token : valid until this time
-}
 
 const fs = require('fs')
 const http = require('http')
 const WebSocket = require('ws')
- 
+const config = require('./config')
+
+const authenticated_tokens = []
+
 const server = new http.createServer()
-const wss = new WebSocket.Server({ server })
+
+const verifyClient = (info) => {
+  if (info.req.headers.secret === config.ws.secret)
+    return true
+
+  const clientToken = info.req.headers['sec-websocket-protocol']
+
+  if (clientToken) {
+    // accept only authorized clients
+    if (authenticated_tokens.includes(clientToken)) {
+      console.log('known clientToken: ', clientToken)
+      return true
+    }
+    
+    console.log('unknown clientToken: ', clientToken)
+    return false
+  }
+
+}
+const wss = new WebSocket.Server({ server, verifyClient })
 
 wss.broadcast = function broadcast(data) {
   wss.clients.forEach(function each(client) {
@@ -30,19 +49,32 @@ wss.broadcast = function broadcast(data) {
       client.send(data)
     }
   })
-}
+} 
 
 wss.on('connection', function connection(ws) {
-  console.log('received: %s', ws)
 
   ws.on('message', function incoming(message) {
     const messageJSON = JSON.parse(message)
-    delete messageJSON.secret
-    console.log('received: %s', messageJSON)
-    wss.broadcast(JSON.stringify(messageJSON))
+    console.log('received: %s', message)
+    if (messageJSON.secret === config.ws.secret) {
+      // parse request from the http server
+
+      if (messageJSON.action === 'add-token') {
+        console.log('added new token to: ', JSON.stringify(authenticated_tokens, null, 2))
+        authenticated_tokens.push(messageJSON.body)
+        
+      }
+
+      if (messageJSON.action === 'broadcast') {
+        wss.broadcast(JSON.stringify({
+          type: 'broadcast',
+          body: messageJSON.body
+        }))
+      }
+    }
   })
  
-  ws.send('Connection to WS Server.')
+  ws.send('Connection to WS Server is established.')
 })
 
 wss.on('open', function open() {

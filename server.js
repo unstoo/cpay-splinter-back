@@ -11,18 +11,19 @@ const express = require('express'),
 const socket = initSocket()
 
 auth(passport)
-
+ 
 app.use(passport.initialize())
 
 app.use(cookieSession({
   name: 'sessionY',
   keys: ['123']
 }))
-
+ 
 app.use(cookieParser())
 
 app.use((req, res, next) => {
   console.log(`${req.method}::path: ${req.path}`)
+  console.log(`session ${req.session.token}`);
   next()
 })
 
@@ -57,10 +58,21 @@ app.get('/auth/google', passport.authenticate('google', {
 app.get('/auth/google/callback', passport.authenticate('google', { failureRedirect: '/' }),
   (req, res) => {
     console.log('Google login by: ', req.user.profile.emails[0].value)
+
     if (req.user.profile.emails[0].value.includes('@cryptopay.me') === false) {
       res.end('Use @cryptopay.me email to login')
     } else {
       req.session.token = req.user.token
+
+      const socketMessage = {
+        action: 'add-token',
+        body: req.session.token,
+        secret: config.ws.secret
+      }
+
+      // TODO: check if socket is open
+      socket.send(JSON.stringify(socketMessage))
+
       res.redirect('/')
     }
   }
@@ -75,33 +87,25 @@ app.get('/logout', (req, res) => {
   res.redirect('/')
 })
 
-app.get('/test', (req,res) => {
-  res.cookie('token', req.session.token)
-
-  res.json({
-    req: JSON.stringify(req.headers, null, 2),
-    res: JSON.stringify(res._headers, null, 2)})
-})
-
 app.get('/api/:msg', (req,res) => {
-  // TODO: Check Token
-  // Write to DB
-  // Pass to WS-Server
-  // WS-Server Broadcasts to authenticated users
-  res.cookie('token', req.session.token)
-
   if (!req.session.token) {
     res.send('{"status": "error", body":"Access denied."}')
     return
   }
+  
+  res.cookie('token', req.session.token)
+  res.send('{"status": "ok", "body":"will broadcast"}')
 
   const socketMessage = {
-    secret: config.ws.secret,
+    action: 'broadcast',
     body: req.params.msg,
-    author: req.session.passport.user.profile.emails[0].value
+    author: req.session.passport.user.profile.emails[0].value,
+    secret: config.ws.secret
   }
 
+  // TODO: check if socket is open
   socket.send(JSON.stringify(socketMessage))
+
 })
 
 app.listen(5000, () => {
@@ -109,7 +113,12 @@ app.listen(5000, () => {
 })
 
 function initSocket() {
-  const socket = new WebSocket('ws://localhost:5005')
+  const socket = new WebSocket('ws://localhost:5005', {
+    headers: {
+      secret: config.ws.secret
+    }
+  })
+
   socket.onopen = function() {
     console.log("Соединение установлено.");
   }
