@@ -116,10 +116,10 @@ app.post('/api/feedback', (req, res) => {
   res.send(JSON.stringify({result: "ok", body: "will broadcast"}))
   
   // TODO: Write to DB
-  dataFromFile.push(dataFromFile)
   req.body.id = dataFromFile.length
   req.body.name = req.author
   req.body.date = (new Date).toJSON().split('T')[0]
+  dataFromFile.push(req.body)
 
   const socketMessage = {
     action: 'feedback-add',
