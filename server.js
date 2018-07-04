@@ -6,7 +6,11 @@ const express = require('express'),
     cookieSession = require('cookie-session'),
     WebSocket = require('ws'),
     path = require('path'),
-    config = require('./config')
+    config = require('./config'),
+    fs = require('fs')
+
+
+const dataFromFile = JSON.parse(fs.readFileSync(path.resolve(__dirname, 'data.txt'), 'utf8'))
 
 const socket = initSocket()
 
@@ -18,8 +22,18 @@ app.use(cookieSession({
   name: 'sessionY',
   keys: ['123']
 }))
- 
+
+
 app.use(cookieParser())
+
+app.use((req, res, next) => {
+  if (req.session.passport)
+    req.author = req.session.passport.user.profile.emails[0].value
+  
+    next()
+})
+
+app.use(express.json())
 
 app.use((req, res, next) => {
   console.log(`${req.method}::path: ${req.path}`)
@@ -32,6 +46,11 @@ app.get('/', (req, res) => {
     res.cookie('token', req.session.token)
     res.sendFile(path.resolve(__dirname, 'dist/index.html'))
   } else {
+    console.log(req.query);
+    if (req.query.email === '') {
+      res.end('<html><span>Use @cryptopay.me email to <a href="/auth/google">Log in</a></span></html>')
+      return
+    }
     res.cookie('token', '')
     res.end('<a href="/auth/google">Log in</a>')
   }
@@ -60,7 +79,7 @@ app.get('/auth/google/callback', passport.authenticate('google', { failureRedire
     console.log('Google login by: ', req.user.profile.emails[0].value)
 
     if (req.user.profile.emails[0].value.includes('@cryptopay.me') === false) {
-      res.end('Use @cryptopay.me email to login')
+      res.redirect('/?email')
     } else {
       req.session.token = req.user.token
 
@@ -87,25 +106,46 @@ app.get('/logout', (req, res) => {
   res.redirect('/')
 })
 
-app.get('/api/:msg', (req,res) => {
+app.post('/api/feedback', (req, res) => {
   if (!req.session.token) {
-    res.send('{"status": "error", body":"Access denied."}')
+    res.send(JSON.stringify({result: "error", body: "Access denied"}))
     return
   }
   
   res.cookie('token', req.session.token)
-  res.send('{"status": "ok", "body":"will broadcast"}')
+  res.send(JSON.stringify({result: "ok", body: "will broadcast"}))
+  
+  // TODO: Write to DB
+  dataFromFile.push(dataFromFile)
+  req.body.id = dataFromFile.length
+  req.body.name = req.author
+  req.body.date = (new Date).toJSON().split('T')[0]
 
   const socketMessage = {
-    action: 'broadcast',
-    body: req.params.msg,
-    author: req.session.passport.user.profile.emails[0].value,
+    action: 'feedback-add',
+    body: req.body,
+    author: req.author,
     secret: config.ws.secret
   }
 
   // TODO: check if socket is open
   socket.send(JSON.stringify(socketMessage))
+})
 
+app.post('/api/tag')
+app.delete('/api/tag')
+
+app.get('/api/getdata', (req, res) => {
+  if (!req.session.token) {
+    return res.send('{result:"error", body:"Access denied"}')
+  }
+
+  res.cookie('token', req.session.token)
+
+  res.end(JSON.stringify({
+    author: req.author,
+    data: dataFromFile
+  }))
 })
 
 app.listen(5000, () => {
