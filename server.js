@@ -114,7 +114,7 @@ app.post('/api/feedback', (req, res) => {
   }
   
   res.cookie('token', req.session.token)
-  res.send(JSON.stringify({result: "ok", body: "will broadcast"}))
+  res.end(JSON.stringify({status: 200, result: "ok", body: "will broadcast"}))
   
   // TODO: Write to DB
   req.body.id = dataFromFile.length
@@ -139,7 +139,7 @@ app.post('/api/tag', (req, res) => {
   }
   
   res.cookie('token', req.session.token)
-  res.send(JSON.stringify({result: "ok", body: "will broadcast"}))
+  res.end(JSON.stringify({status: 200, result: "ok", body: "will broadcast"}))
 
   const serializedTags = {}
 
@@ -176,6 +176,12 @@ app.post('/api/tag', (req, res) => {
 })
 
 app.delete('/api/tag', (req, res) => {
+  if (!req.session.token) {
+    return res.send(JSON.stringify({result: "error", body: "Access denied"}))
+  }
+
+  res.cookie('token', req.session.token)
+  res.end(JSON.stringify({status: 200, result: "ok", body: "will broadcast"}))
 
   const { feedbackId, tagName } = req.body
 
