@@ -37,7 +37,8 @@ app.use(express.json())
 
 app.use((req, res, next) => {
   console.log(`${req.method}::path: ${req.path}`)
-  console.log(`session ${req.session.token}`);
+  console.log(`session ${req.session.token}`)
+  console.log(`body ${JSON.stringify(req.body)}`)
   next()
 })
 
@@ -132,7 +133,47 @@ app.post('/api/feedback', (req, res) => {
   socket.send(JSON.stringify(socketMessage))
 })
 
-app.post('/api/tag')
+app.post('/api/tag', (req, res) => {
+  if (!req.session.token) {
+    return res.send(JSON.stringify({result: "error", body: "Access denied"}))
+  }
+  
+  res.cookie('token', req.session.token)
+  res.send(JSON.stringify({result: "ok", body: "will broadcast"}))
+
+  const serializedTags = {}
+
+  if (req.body.tagName.length > 0) {
+    req.body.tagName.split(' ').forEach(tag => {
+      serializedTags[tag] = {}
+      serializedTags[tag].author = req.author
+      serializedTags[tag].timestamp = (new Date).toJSON()
+    })
+  }
+
+  // TODO: Write to DB
+  const tagsUpdated = Object.assign(
+    {},
+    dataFromFile[req.body.feedbackId].tags,
+    serializedTags
+  )
+
+  dataFromFile[req.body.feedbackId].tags = tagsUpdated
+
+  delete req.body.tagName
+
+  req.body.tags = serializedTags
+
+  const socketMessage = {
+    action: 'tag-add',
+    body: req.body,
+    author: req.author,
+    secret: config.ws.secret
+  }
+
+  // TODO: check if socket is open
+  socket.send(JSON.stringify(socketMessage))
+})
 app.delete('/api/tag')
 
 app.get('/api/getdata', (req, res) => {
