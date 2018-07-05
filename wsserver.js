@@ -73,9 +73,9 @@ wss.on('connection', function connection(ws) {
       }))
     }
 
-    if (messageJSON.action === 'tag-remove') {
+    if (messageJSON.action === 'tag-delete') {
       wss.broadcast(JSON.stringify({
-        action: 'tag-remove',
+        action: 'tag-delete',
         body: messageJSON.body,
         author: messageJSON.author
       }))

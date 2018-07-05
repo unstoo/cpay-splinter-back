@@ -174,7 +174,31 @@ app.post('/api/tag', (req, res) => {
   // TODO: check if socket is open
   socket.send(JSON.stringify(socketMessage))
 })
-app.delete('/api/tag')
+
+app.delete('/api/tag', (req, res) => {
+
+  const { feedbackId, tagName } = req.body
+
+  const tagList = dataFromFile[feedbackId].tags
+  const updatedTagList = {}
+
+  Object.keys(tagList).forEach(tag => {
+    if (tag !== tagName)
+      updatedTagList[tagName] = tagList[tagName]
+  })
+
+  dataFromFile[feedbackId].tags = updatedTagList
+
+  const socketMessage = {
+    action: 'tag-delete',
+    body: req.body,
+    author: req.author,
+    secret: config.ws.secret
+  }
+
+  // TODO: check if socket is open
+  socket.send(JSON.stringify(socketMessage))
+})
 
 app.get('/api/getdata', (req, res) => {
   if (!req.session.token) {
@@ -206,11 +230,11 @@ function initSocket() {
 
   socket.onclose = function(event) {
     if (event.wasClean) {
-      console.log('Соединение закрыто чисто');
+      console.log('Соединение закрыто чисто')
     } else {
-      console.log('Обрыв соединения'); // например, "убит" процесс сервера
+      console.log('Обрыв соединения') // например, "убит" процесс сервера
     }
-    console.log('Код: ' + event.code + ' причина: ' + event.reason);
+    console.log('Код: ' + event.code + ' причина: ' + event.reason)
   }
 
   socket.onmessage = function(event) {
@@ -218,7 +242,7 @@ function initSocket() {
   }
 
   socket.onerror = function(error) {
-    console.log("Ошибка " + error.message);
+    console.log("Ошибка " + error.message)
   }
 
   return socket
