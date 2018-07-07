@@ -1,16 +1,24 @@
 const express = require('express'),
-    app = express(),
-    passport = require('passport'),
-    auth = require('./auth'),
-    cookieParser = require('cookie-parser'),
-    cookieSession = require('cookie-session'),
-    WebSocket = require('ws'),
-    path = require('path'),
-    config = require('./config'),
-    fs = require('fs')
+  app = express(),
+  passport = require('passport'),
+  auth = require('./auth'),
+  cookieParser = require('cookie-parser'),
+  cookieSession = require('cookie-session'),
+  WebSocket = require('ws'),
+  path = require('path'),
+  config = require('./config'),
+  fs = require('fs'),
+  pg = require('pg')
 
+const pool = new pg.Pool({
+  user: config.pg.user,
+  host: config.pg.host,
+  database: config.pg.database,
+  password: config.pg.password,
+  port: config.pg.port
+})
 
-const dataFromFile = JSON.parse(fs.readFileSync(path.resolve(__dirname, 'data.txt'), 'utf8'))
+// const dataFromFile = JSON.parse(fs.readFileSync(path.resolve(__dirname, 'data.txt'), 'utf8'))
 
 const socket = initSocket()
 
@@ -22,7 +30,6 @@ app.use(cookieSession({
   name: 'sessionY',
   keys: ['123']
 }))
-
 
 app.use(cookieParser())
 
@@ -107,20 +114,45 @@ app.get('/logout', (req, res) => {
   res.redirect('/')
 })
 
-app.post('/api/feedback', (req, res) => {
+app.post('/api/feedback', async(req, res) => {
   if (!req.session.token) {
-    res.send(JSON.stringify({result: "error", body: "Access denied"}))
+    res.end(JSON.stringify({result: "error", body: "Access denied"}))
     return
   }
   
   res.cookie('token', req.session.token)
-  res.end(JSON.stringify({status: 200, result: "ok", body: "will broadcast"}))
   
   // TODO: Write to DB
-  req.body.id = dataFromFile.length
+  const feedbackId = await getLastId()
+  if (feedbackId === false) {
+    res.end(JSON.stringify({result: "error", body: "Couldn't get last id from postgres"}))
+    return
+  }
+
+  req.body.id = parseInt(feedbackId) + 1
   req.body.name = req.author
   req.body.date = (new Date).toJSON().split('T')[0]
-  dataFromFile.push(req.body)
+
+  const serializedTags = {}
+
+  if (req.body.tags !== '') {
+    req.body.tags.split(' ').forEach(tag => {
+      serializedTags[tag] = {}
+      serializedTags[tag].author = req.author
+      serializedTags[tag].timestamp = (new Date).toJSON()
+    })
+  }
+
+  req.body.tags = serializedTags
+
+  const result = await insertFeedback(req.body)
+
+  if (result === false) {
+    res.end(JSON.stringify({result: "error", body: "Couldn't insert into postgres"}))
+    return
+  }
+
+  res.end(JSON.stringify({status: 200, result: "ok", body: "will broadcast"}))
 
   const socketMessage = {
     action: 'feedback-add',
@@ -206,16 +238,28 @@ app.delete('/api/tag', (req, res) => {
   socket.send(JSON.stringify(socketMessage))
 })
 
-app.get('/api/getdata', (req, res) => {
+app.get('/api/getdata', async(req, res) => {
   if (!req.session.token) {
     return res.send('{result:"error", body:"Access denied"}')
   }
 
   res.cookie('token', req.session.token)
+  const data = await getAll()
+  const dataParsed = []
+  
+  if (data === false) {
+    return res.end(JSON.stringify({
+      author: req.author,
+      data: [],
+      error: 'getAll() failed to fetch data from postgres'
+    }))
+  }
+
+  data.forEach(entry => dataParsed.push(entry.entry))
 
   res.end(JSON.stringify({
     author: req.author,
-    data: dataFromFile
+    data: dataParsed
   }))
 })
 
@@ -253,3 +297,43 @@ function initSocket() {
 
   return socket
 }
+
+const getAll = async() => {
+  const text = 'SELECT entry FROM public.feedbacks'
+  let result
+  try {
+    result = await pool.query(text)
+  } catch(err) {
+    console.log(err.stack)
+    return false
+  }
+  return result.rows
+}
+
+const insertFeedback = async(feedback) => {
+  const text = 'INSERT INTO public.feedbacks(entry) VALUES($1) RETURNING *'
+  const values = [JSON.stringify(feedback)]
+
+  let result
+  try {
+    result = await pool.query(text, values)
+  } catch(err) {
+    console.log(err.stack)
+    return false
+  }
+
+  return result
+}
+
+const getLastId = async() => { 
+  let id = false
+  const text = 'select id from feedbacks order by id desc limit 1'
+  try {
+    const result = await pool.query(text)
+    id = result.rows[0].id
+  } catch(err) {
+    console.log(err.stack)
+  }
+  return id
+}
+
