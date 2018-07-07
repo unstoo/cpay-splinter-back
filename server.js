@@ -165,13 +165,18 @@ app.post('/api/feedback', async(req, res) => {
   socket.send(JSON.stringify(socketMessage))
 })
 
-app.post('/api/tag', (req, res) => {
+app.post('/api/tag', async(req, res) => {
   if (!req.session.token) {
     return res.send(JSON.stringify({result: "error", body: "Access denied"}))
   }
-  
   res.cookie('token', req.session.token)
-  res.end(JSON.stringify({status: 200, result: "ok", body: "will broadcast"}))
+  
+  const feedback = await getFeedbackById(req.body.feedbackId)
+
+  if (feedback === false) {
+    res.end(JSON.stringify({status: 500, result: "error", body: "Couldn't select feedback from postgres"}))
+    return
+  }
 
   const serializedTags = {}
 
@@ -183,14 +188,21 @@ app.post('/api/tag', (req, res) => {
     })
   }
 
-  // TODO: Write to DB
+  // Don't update existing tags
   const tagsUpdated = Object.assign(
     {},
-    dataFromFile[req.body.feedbackId].tags,
-    serializedTags
+    serializedTags,
+    feedback.tags
   )
+  
+  feedback.tags = tagsUpdated
 
-  dataFromFile[req.body.feedbackId].tags = tagsUpdated
+  const updateResult = await updateFeedback(feedback)
+  
+  if (updateResult === false) {
+    res.end(JSON.stringify({status: 500, result: "error", body: "Couldn't update feedback in postgres"}))
+    return
+  }
 
   delete req.body.tagName
 
@@ -207,25 +219,38 @@ app.post('/api/tag', (req, res) => {
   socket.send(JSON.stringify(socketMessage))
 })
 
-app.delete('/api/tag', (req, res) => {
+app.delete('/api/tag', async(req, res) => {
   if (!req.session.token) {
     return res.send(JSON.stringify({result: "error", body: "Access denied"}))
   }
-
   res.cookie('token', req.session.token)
-  res.end(JSON.stringify({status: 200, result: "ok", body: "will broadcast"}))
 
   const { feedbackId, tagName } = req.body
 
-  const tagList = dataFromFile[feedbackId].tags
+  const feedback = await getFeedbackById(req.body.feedbackId)
+
+  if (feedback === false) {
+    res.end(JSON.stringify({status: 500, result: "error", body: "Couldn't select feedback from postgres"}))
+    return
+  }
+
   const updatedTagList = {}
 
-  Object.keys(tagList).forEach(tag => {
+  Object.keys(feedback.tags).forEach(tag => {
     if (tag !== tagName)
-      updatedTagList[tagName] = tagList[tagName]
+      updatedTagList[tagName] = feedback.tags[tagName]
   })
 
-  dataFromFile[feedbackId].tags = updatedTagList
+  feedback.tags = updatedTagList
+
+  const updateResult = await updateFeedback(feedback)
+
+  if (feedback === false) {
+    res.end(JSON.stringify({status: 500, result: "error", body: "Couldn't update feedback in postgres"}))
+    return
+  }
+
+  res.end(JSON.stringify({status: 200, result: "ok", body: "Successfully removed tag; Will broadcast"}))
 
   const socketMessage = {
     action: 'tag-delete',
@@ -299,7 +324,7 @@ function initSocket() {
 }
 
 const getAll = async() => {
-  const text = 'SELECT entry FROM public.feedbacks'
+  const text = 'SELECT entry FROM public.feedbacks order by id asc'
   let result
   try {
     result = await pool.query(text)
@@ -335,5 +360,30 @@ const getLastId = async() => {
     console.log(err.stack)
   }
   return id
+}
+
+const getFeedbackById = async(id) => { 
+  let entry = false
+  const text = 'select entry from feedbacks where id = $1'
+  const values = [id]
+  try {
+    const result = await pool.query(text, values)
+    entry = result.rows[0].entry
+  } catch(err) {
+    console.log(err.stack)
+  }
+  return entry
+}
+
+const updateFeedback = async(feedback) => { 
+  let result = false
+  const text = "UPDATE feedbacks SET entry = $1 WHERE id = $2 "
+  const values = [JSON.stringify(feedback), feedback.id]
+  try {
+    result = await pool.query(text, values)
+  } catch(err) {
+    console.log(err.stack)
+  }
+  return result
 }
 
