@@ -52,7 +52,7 @@ wss.on('connection', function connection(ws) {
     if (messageJSON.secret !== config.ws.secret) return
       // parse request from the http server
 
-    if (messageJSON.action === 'add-token') {
+    if (messageJSON.action === 'token-add') {
       console.log('Added new token to.')
       authenticated_tokens.push(messageJSON.body)
     }

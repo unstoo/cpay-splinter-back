@@ -92,7 +92,7 @@ app.get('/auth/google/callback', passport.authenticate('google', { failureRedire
       req.session.token = req.user.token
 
       const socketMessage = {
-        action: 'add-token',
+        action: 'token-add',
         body: req.session.token,
         secret: config.ws.secret
       }
