@@ -1,3 +1,7 @@
 /node_modules/
 config.js
 /dist/
+data.txt
+data2.js
+data3.js
+pg.js
