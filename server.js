@@ -49,6 +49,12 @@ app.use((req, res, next) => {
   next()
 })
 
+app.use(function(req, res, next) {
+  res.header("Access-Control-Allow-Origin", "*")
+  res.header("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept")
+  next()
+})
+
 app.get('/', (req, res) => {
   if (req.session.token) {
     res.cookie('token', req.session.token)
@@ -181,7 +187,7 @@ app.post('/api/tag', async(req, res) => {
   const serializedTags = {}
 
   if (req.body.tagName.length > 0) {
-    req.body.tagName.split(' ').forEach(tag => {
+    req.body.tagName.split(',').forEach(tag => {
       serializedTags[tag] = {}
       serializedTags[tag].author = req.author
       serializedTags[tag].timestamp = (new Date).toJSON()
