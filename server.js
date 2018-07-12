@@ -6,9 +6,23 @@ const express = require('express'),
   cookieSession = require('cookie-session'),
   WebSocket = require('ws'),
   path = require('path'),
-  config = require('./config'),
+  config = require('./backend-config'),
   fs = require('fs'),
   pg = require('pg')
+
+const webpack = require("webpack");
+const webpackConfig = require("./webpack.config");
+const compiler = webpack(webpackConfig);
+
+app.use(
+  require("webpack-dev-middleware")(compiler, {
+      noInfo: true,
+      publicPath: webpackConfig.output.publicPath
+  })
+)
+
+app.use(require("webpack-hot-middleware")(compiler))
+
 
 const pool = new pg.Pool({
   user: config.pg.user,
@@ -49,12 +63,6 @@ app.use((req, res, next) => {
   next()
 })
 
-app.use(function(req, res, next) {
-  res.header("Access-Control-Allow-Origin", "*")
-  res.header("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept")
-  next()
-})
-
 app.get('/', (req, res) => {
   if (req.session.token) {
     res.cookie('token', req.session.token)
@@ -70,7 +78,7 @@ app.get('/', (req, res) => {
   }
 })
 
-// Give app only to authenticated users.
+// Serve app only to authenticated users
 app.get('/app.bundle.js', (req, res) => {
   if (req.session.token) {
     res.cookie('token', req.session.token)  
@@ -142,7 +150,7 @@ app.post('/api/feedback', async(req, res) => {
   const serializedTags = {}
 
   if (req.body.tags !== '') {
-    req.body.tags.split(' ').forEach(tag => {
+    req.body.tags.split(',').forEach(tag => {
       serializedTags[tag] = {}
       serializedTags[tag].author = req.author
       serializedTags[tag].timestamp = (new Date).toJSON()
@@ -178,14 +186,14 @@ app.post('/api/tag', async(req, res) => {
   res.cookie('token', req.session.token)
   
   const feedback = await getFeedbackById(req.body.feedbackId)
-
+  
   if (feedback === false) {
     res.end(JSON.stringify({status: 500, result: "error", body: "Couldn't select feedback from postgres"}))
     return
   }
-
+  
   const serializedTags = {}
-
+  
   if (req.body.tagName.length > 0) {
     req.body.tagName.split(',').forEach(tag => {
       serializedTags[tag] = {}
@@ -194,7 +202,11 @@ app.post('/api/tag', async(req, res) => {
     })
   }
 
-  // Don't update existing tags
+  Object.keys(serializedTags).forEach(async(tagName) => {
+    const r = await insertTagIntoTagsByCategories(tagName)
+  })
+  
+  // Don't update existing tags, with new duplicate tags
   const tagsUpdated = Object.assign(
     {},
     serializedTags,
@@ -292,6 +304,18 @@ app.get('/api/getdata', async(req, res) => {
     author: req.author,
     data: dataParsed
   }))
+})
+
+app.post('/api/category', async(req, res) => {
+  if (!req.session.token) {
+    return res.send('{result:"error", body:"Access denied"}')
+  }
+
+  res.cookie('token', req.session.token)
+
+  // update token to be inserted
+
+
 })
 
 app.listen(5000, () => {
@@ -393,3 +417,28 @@ const updateFeedback = async(feedback) => {
   return result
 }
 
+const insertTagIntoTagsByCategories = async(tagName) => {
+  let result = false
+  const checkForExistence = "SELECT * FROM tag_category WHERE tag = $1"
+  const valuesForExistence = [tagName]
+  try {
+    result = await pool.query(checkForExistence, valuesForExistence)
+    if (result.rows.length !== 0) {
+      return true
+    }
+  } catch(err) {
+    console.log(JSON.stringify(err, null, 2))
+  } 
+
+  const text = "INSERT INTO tag_category (tag, category) VALUES ($1, $2) RETURNING *"
+  const values = [tagName, 'none']
+  try {
+    result = await pool.query(text, values)
+    result = result.rows[0]
+  } catch(err) {
+    console.log(JSON.stringify(err, null, 2))
+    if (err.code == 23505) {
+      result = true
+    }
+  } 
+}
