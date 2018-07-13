@@ -6,9 +6,23 @@ const express = require('express'),
   cookieSession = require('cookie-session'),
   WebSocket = require('ws'),
   path = require('path'),
-  config = require('./config'),
+  config = require('./backend-config'),
   fs = require('fs'),
   pg = require('pg')
+
+const webpack = require("webpack");
+const webpackConfig = require("./webpack.config");
+const compiler = webpack(webpackConfig);
+
+app.use(
+  require("webpack-dev-middleware")(compiler, {
+      noInfo: true,
+      publicPath: webpackConfig.output.publicPath
+  })
+)
+
+app.use(require("webpack-hot-middleware")(compiler))
+
 
 const pool = new pg.Pool({
   user: config.pg.user,
@@ -64,7 +78,7 @@ app.get('/', (req, res) => {
   }
 })
 
-// Give app only to authenticated users.
+// Serve app only to authenticated users
 app.get('/app.bundle.js', (req, res) => {
   if (req.session.token) {
     res.cookie('token', req.session.token)  
@@ -136,7 +150,7 @@ app.post('/api/feedback', async(req, res) => {
   const serializedTags = {}
 
   if (req.body.tags !== '') {
-    req.body.tags.split(' ').forEach(tag => {
+    req.body.tags.split(',').forEach(tag => {
       serializedTags[tag] = {}
       serializedTags[tag].author = req.author
       serializedTags[tag].timestamp = (new Date).toJSON()
@@ -172,23 +186,28 @@ app.post('/api/tag', async(req, res) => {
   res.cookie('token', req.session.token)
   
   const feedback = await getFeedbackById(req.body.feedbackId)
-
+  
   if (feedback === false) {
     res.end(JSON.stringify({status: 500, result: "error", body: "Couldn't select feedback from postgres"}))
     return
   }
-
+  
   const serializedTags = {}
-
+  
   if (req.body.tagName.length > 0) {
-    req.body.tagName.split(' ').forEach(tag => {
+    req.body.tagName.split(',').forEach(tag => {
+      tag = tag.trim()
       serializedTags[tag] = {}
       serializedTags[tag].author = req.author
       serializedTags[tag].timestamp = (new Date).toJSON()
     })
   }
 
-  // Don't update existing tags
+  Object.keys(serializedTags).forEach(async(tagName) => {
+    const r = await insertTagIntoTagsByCategories(tagName)
+  })
+  
+  // Don't update existing tags, with new duplicate tags
   const tagsUpdated = Object.assign(
     {},
     serializedTags,
@@ -227,7 +246,9 @@ app.delete('/api/tag', async(req, res) => {
 
   const { feedbackId, tagName } = req.body
 
-  const feedback = await getFeedbackById(req.body.feedbackId)
+
+
+  const feedback = await getFeedbackById(feedbackId)
 
   if (feedback === false) {
     res.end(JSON.stringify({status: 500, result: "error", body: "Couldn't select feedback from postgres"}))
@@ -238,16 +259,31 @@ app.delete('/api/tag', async(req, res) => {
 
   Object.keys(feedback.tags).forEach(tag => {
     if (tag !== tagName)
-      updatedTagList[tagName] = feedback.tags[tagName]
+      updatedTagList[tag] = feedback.tags[tag]
   })
 
   feedback.tags = updatedTagList
 
   const updateResult = await updateFeedback(feedback)
 
-  if (feedback === false) {
+  if (updateResult === false) {
     res.end(JSON.stringify({status: 500, result: "error", body: "Couldn't update feedback in postgres"}))
     return
+  }
+
+  const count = await countTagNameAppearances(tagName)
+  
+  if (count === 0) {
+    let res = await deleteTagFromTagCategory(tagName)
+
+    const socketMessage = {
+      action: 'tag-purge',
+      body: { tagName },
+      author: req.author,
+      secret: config.ws.secret
+    }
+
+    socket.send(JSON.stringify(socketMessage))
   }
 
   res.end(JSON.stringify({status: 200, result: "ok", body: "Successfully removed tag; Will broadcast"}))
@@ -263,33 +299,148 @@ app.delete('/api/tag', async(req, res) => {
   socket.send(JSON.stringify(socketMessage))
 })
 
+app.patch('/api/tag', async(req, res) => {
+  if (!req.session.token) {
+    return res.send('{result:"error", body:"Access denied"}')
+  }
+  res.cookie('token', req.session.token)
+
+  const { currentTagName, newTagName } = req.body
+  if (!currentTagName || !newTagName) {
+    return res.send('{result:"error", body:"Missing argument(s)"}')
+  }
+
+  // select id, entry where @> { "tags": { [currentTagName]: {} } }
+  const feedbacks = await selelctAllFeedbacksWhereTagsIncludeTagName(currentTagName)
+
+  feedbacks.forEach(feedback => {
+    const feedbackHasTagNameToBeUpdated = Object.keys(feedback.entry.tags).includes(currentTagName)
+    let temp = {}
+    if (feedbackHasTagNameToBeUpdated) {
+      temp = feedback.entry.tags[currentTagName]
+      delete feedback.entry.tags[currentTagName]
+      feedback.entry.tags[newTagName] = temp
+    }
+  })
+
+  let feedbackUpdateErrorFlag = false
+
+  let index = 0
+  while (index < feedbacks.length) {
+    let result = await updateFeedback(feedbacks[index].entry)
+    if (result === false) {
+      feedbackUpdateErrorFlag = true
+    }
+    index += 1
+  }
+
+  if (feedbackUpdateErrorFlag) {
+    throw new Error('ZHOPA DB')
+    // TODO: update all feedbacks otherwise rollback all changes
+  }
+
+  // 1) check if the currentTagName was purged from Feedbacks
+  const count = await countTagNameAppearances(currentTagName)
+  let bp = true
+  if (count !== 0)
+    // NOT ALL currenTagNames were updated in postgres as supposed
+    throw new Error('WTOTO POWLO NE TAK -- ZHOPA ALERT')
+  
+  // 2) delete currentTagName from tag_category
+  const removalResult = await deleteTagFromTagCategory(currentTagName)
+  
+  if (removalResult === false)
+    throw new Error('SLU4iLAS HERNJA. RAZBERISJ DZHEDAJ')
+
+  // 3) insert newTagName to tag_category
+  const insertionResult = await insertTagIntoTagsByCategories(newTagName)
+
+  if (insertionResult === false)
+    throw new Error('OPC -- POPEC NASTIG TEBJA')
+
+
+  // broadcast tag currentTagName renamed to newTagName
+  const socketMessage = {
+    action: 'tag-rename',
+    body: req.body,
+    author: req.author,
+    secret: config.ws.secret
+  }
+
+  res.end(JSON.stringify({status: 200, result: "ok", body: "Will broadcast the amendmend"}))
+
+  // TODO: check if socket is open
+  socket.send(JSON.stringify(socketMessage))
+})
+
 app.get('/api/getdata', async(req, res) => {
   if (!req.session.token) {
     return res.send('{result:"error", body:"Access denied"}')
   }
 
   res.cookie('token', req.session.token)
-  const data = await getAll()
-  const dataParsed = []
+  const data = await selectAllFeedbacks()
   
   if (data === false) {
     return res.end(JSON.stringify({
       author: req.author,
       data: [],
-      error: 'getAll() failed to fetch data from postgres'
+      error: 'selectAllFeedbacks() failed to fetch data from postgres'
     }))
   }
 
+  const tagsCategory = await selectAllTagCategory()
+
+  if (tagsCategory === false) {
+    return res.end(JSON.stringify({
+      author: req.author,
+      data: [],
+      error: 'selectAllTagCategory() failed to fetch data from postgres'
+    }))
+  }
+
+  const tagCategoryParsed = {}
+  tagsCategory.forEach(row => tagCategoryParsed[row.tag] = row.category)
+  
+  const dataParsed = []
   data.forEach(entry => dataParsed.push(entry.entry))
 
   res.end(JSON.stringify({
     author: req.author,
-    data: dataParsed
+    data: dataParsed,
+    tagsByCategory: tagCategoryParsed
   }))
 })
 
-app.listen(3000, () => {
-    console.log('Server is running on port 3000')
+app.post('/api/category', async(req, res) => {
+  if (!req.session.token) {
+    return res.send('{result:"error", body:"Access denied"}')
+  }
+
+  res.cookie('token', req.session.token)
+
+  const updateResult = await updateTagsCategory(req.body.tagName, req.body.categoryName)
+
+   if (updateResult === false) {
+    res.end(JSON.stringify({status: 500, result: "error", body: "Couldn't update tag's category in postgres"}))
+    return
+  }
+
+  const socketMessage = {
+    action: 'category-set',
+    body: req.body,
+    author: req.author,
+    secret: config.ws.secret
+  }
+
+  res.end(JSON.stringify({status: 200, result: "ok", body: "Will broadcast the amendmend"}))
+
+  // TODO: check if socket is open
+  socket.send(JSON.stringify(socketMessage))
+})
+
+app.listen(5000, () => {
+    console.log('Server is running on port 5000')
 })
 
 function initSocket() {
@@ -323,8 +474,20 @@ function initSocket() {
   return socket
 }
 
-const getAll = async() => {
+const selectAllFeedbacks = async() => {
   const text = 'SELECT entry FROM public.feedbacks order by id asc'
+  let result
+  try {
+    result = await pool.query(text)
+  } catch(err) {
+    console.log(err.stack)
+    return false
+  }
+  return result.rows
+}
+
+const selectAllTagCategory = async() => {
+  const text = 'SELECT tag, category FROM public.tag_category order by tag desc'
   let result
   try {
     result = await pool.query(text)
@@ -387,3 +550,79 @@ const updateFeedback = async(feedback) => {
   return result
 }
 
+const insertTagIntoTagsByCategories = async(tagName) => {
+  let result = false
+  const checkForExistence = "SELECT * FROM tag_category WHERE tag = $1"
+  const valuesForExistence = [tagName]
+  try {
+    result = await pool.query(checkForExistence, valuesForExistence)
+    if (result.rows.length !== 0) {
+      return true
+    }
+  } catch(err) {
+    console.log(JSON.stringify(err, null, 2))
+  } 
+
+  const text = "INSERT INTO tag_category (tag, category) VALUES ($1, $2) RETURNING *"
+  const values = [tagName, 'none']
+  try {
+    result = await pool.query(text, values)
+    result = result.rows[0]
+  } catch(err) {
+    console.log(JSON.stringify(err, null, 2))
+    if (err.code == 23505) {
+      result = true
+    }
+  } 
+}
+
+const updateTagsCategory = async(tagName, categoryName) => {
+  let result = false
+  const text = 'UPDATE tag_category SET category = $2 WHERE tag = $1 '
+  const values = [tagName, categoryName]
+  try {
+    result = await pool.query(text, values)
+  } catch(err) {
+    console.log(err.stack)
+  }
+  return result
+}
+
+const countTagNameAppearances = async(tagName) => {
+  let result
+  const text = `select * from feedbacks where entry @> $1`
+  const value = [JSON.stringify({"tags": {[tagName]: {}}})]
+  try {
+    result = await pool.query(text, value)
+    return result.rows.length
+  } catch(err) {
+    console.log(err.stack)
+    return false
+  }
+}
+
+const selelctAllFeedbacksWhereTagsIncludeTagName = async(tagName) => {
+  let result
+  const text = `select * from feedbacks where entry @> $1`
+  const value = [JSON.stringify({"tags": {[tagName]: {}}})]
+  try {
+    result = await pool.query(text, value)
+    return result.rows
+  } catch(err) {
+    console.log(err.stack)
+    return false
+  }
+}
+
+const deleteTagFromTagCategory = async(tagName) => {
+  let result
+  const text = `delete from tag_category where tag = $1`
+  const value = [tagName]
+  try {
+    const { rowCount } = await pool.query(text, value)
+    return { rowCount }
+  } catch(err) {
+    console.log(err.stack)
+    return false
+  }
+}

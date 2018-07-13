@@ -10,7 +10,7 @@ const PORT = 5005
 const fs = require('fs')
 const http = require('http')
 const WebSocket = require('ws')
-const config = require('./config')
+const config = require('./backend-config')
 
 const authenticated_tokens = []
 
@@ -73,6 +73,14 @@ wss.on('connection', function connection(ws) {
       }))
     }
 
+    if (messageJSON.action === 'tag-purge') {
+      wss.broadcast(JSON.stringify({
+        action: 'tag-purge',
+        body: messageJSON.body,
+        author: messageJSON.author
+      }))
+    }
+
     if (messageJSON.action === 'tag-delete') {
       wss.broadcast(JSON.stringify({
         action: 'tag-delete',
@@ -81,6 +89,21 @@ wss.on('connection', function connection(ws) {
       }))
     }
 
+    if (messageJSON.action === 'tag-rename') {
+      wss.broadcast(JSON.stringify({
+        action: 'tag-delete',
+        body: messageJSON.body,
+        author: messageJSON.author
+      }))
+    }
+
+    if (messageJSON.action === 'category-set') {
+      wss.broadcast(JSON.stringify({
+        action: 'category-set',
+        body: messageJSON.body,
+        author: messageJSON.author
+      }))
+    }
   })
  
   console.log('A new connection to WS server is established.')
